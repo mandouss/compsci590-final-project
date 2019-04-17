@@ -12,7 +12,7 @@ int main(){
   /* system(parameter); */
 
 
-  setuid(1337);
+  setuid(12345);
   uid_t ID;
   uid_t EID;
   ID = getuid();

