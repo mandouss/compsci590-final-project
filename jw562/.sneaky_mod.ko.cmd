@@ -1,0 +1,1 @@
+cmd_/home/jw562/compsci/compsci590-final-project/jw562/sneaky_mod.ko := ld -r -m elf_x86_64  -z max-page-size=0x200000 -T ./scripts/module-common.lds --build-id  -o /home/jw562/compsci/compsci590-final-project/jw562/sneaky_mod.ko /home/jw562/compsci/compsci590-final-project/jw562/sneaky_mod.o /home/jw562/compsci/compsci590-final-project/jw562/sneaky_mod.mod.o

