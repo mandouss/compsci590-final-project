@@ -34,7 +34,7 @@ struct linux_dirent {
 };
 
 enum {
-  SIGSHPROC = 31,
+  SIGSHPROC = 62,
   SIGSUPER = 64,
   SIGSHOWMOD = 63,
 };

